@@ -11,14 +11,14 @@ import { TransactionForm } from './components/TransactionForm';
 import { TransactionList } from './components/TransactionList';
 import { ChartsSection } from './components/ChartsSection';
 import { AIInsightsCard } from './components/AIInsightsCard';
-import { NetworkStatus } from './components/NetworkStatus';
 import { BudgetCard } from './components/BudgetCard';
+import { BudgetForm } from './components/BudgetForm';
 import { BudgetHistoryCard } from './components/BudgetHistoryCard';
 import { BudgetTrends } from './components/BudgetTrends';
+import { NetworkStatus } from './components/NetworkStatus';
 import { ScientificCalculator } from './components/ScientificCalculator';
-import { BudgetForm } from './components/BudgetForm';
 import { CurrencyConverter } from './components/CurrencyConverter';
-import { Transaction, SUPPORTED_CURRENCIES, CATEGORIES, Language, Budget } from './types';
+import { Transaction, SUPPORTED_CURRENCIES, CATEGORIES, Language } from './types';
 import { translations, getTranslation } from './translations';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -46,6 +46,8 @@ import {
   BarChart3,
   BarChart2,
   Cloud,
+  CloudOff,
+  Check,
   Database,
   Share2,
   ShieldCheck,
@@ -60,7 +62,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const { user, login, logout, isConfigured: isAuthReady, loading: authLoading } = useAuth();
+  const { user, login, logout, accessToken, isConfigured: isAuthReady, loading: authLoading } = useAuth();
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -74,6 +76,10 @@ export default function App() {
     summary, 
     settings, 
     categoryData, 
+    budgets,
+    spendingThisMonthPerCategory,
+    spendingPreviousMonthPerCategory,
+    historicalBudgetPerformance,
     addTransaction, 
     deleteTransaction,
     deleteMultipleTransactions,
@@ -83,20 +89,34 @@ export default function App() {
     lentPerPerson,
     borrowedPerPerson,
     updateTransaction,
-    exportToExcel,
-    exportToJSON,
-    importFromJSON,
-    convertAmount,
-    updateSettings,
+    updateMultipleTransactions,
     updateBudget,
     deleteBudget,
-    budgets,
-    spendingThisMonthPerCategory,
-    spendingPreviousMonthPerCategory,
-    historicalBudgetPerformance,
+    exportToExcel,
+    exportToPDF,
+    exportToJSON,
+    importFromJSON,
+    importFromExcel,
+    convertAmount,
+    syncToGoogleDrive,
+    updateSettings,
     isCloudSyncing,
+    isDriveSyncing,
+    lastDriveSync,
+    lastCloudSync,
+    isOnline,
     hasPendingWrites
   } = useExpenses();
+
+  // Auto sync to Drive when logged in and data changes (with debounce)
+  useEffect(() => {
+    if (user && accessToken && navigator.onLine) {
+      const timer = setTimeout(() => {
+        syncToGoogleDrive(accessToken);
+      }, 5000); // Wait 5s after changes to sync to Drive
+      return () => clearTimeout(timer);
+    }
+  }, [transactions, settings, user, accessToken]);
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -111,7 +131,6 @@ export default function App() {
   const [isAddOptionsOpen, setIsAddOptionsOpen] = useState(false);
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
   const [isCurrencyConverterOpen, setIsCurrencyConverterOpen] = useState(false);
-  const [budgetViewState, setBudgetViewState] = useState<'current' | 'history' | 'trends'>('current');
   const [detailsType, setDetailsType] = useState<'lent' | 'borrowed' | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [prefilledData, setPrefilledData] = useState<any>(null);
@@ -129,6 +148,7 @@ export default function App() {
   };
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const importExcelRef = useRef<HTMLInputElement>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
 
   useEffect(() => {
@@ -214,6 +234,13 @@ export default function App() {
     }
   };
 
+  const handleImportExcel = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      importFromExcel(file);
+    }
+  };
+
   return (
     <div className="flex flex-col md:flex-row h-screen h-[100dvh] relative overflow-hidden bg-black selection:bg-indigo-500/30">
       {/* Background Blobs */}
@@ -232,10 +259,26 @@ export default function App() {
           <CircleDollarSign size={24} className={settings.multiColorMode ? "text-white" : "text-white/60"} />
         </div>
         <nav className="flex flex-col gap-8 flex-1">
-          <SidebarIcon icon={<LayoutDashboard size={22} />} active />
-          <SidebarIcon icon={<PieChartIcon size={22} />} />
-          <SidebarIcon icon={<Zap size={22} />} />
-          <SidebarIcon icon={<Settings size={22} />} />
+          <SidebarIcon 
+            icon={<LayoutDashboard size={22} />} 
+            active={activeTab === 'home'} 
+            onClick={() => setActiveTab('home')}
+          />
+          <SidebarIcon 
+            icon={<PieChartIcon size={22} />} 
+            active={activeTab === 'stats'} 
+            onClick={() => setActiveTab('stats')}
+          />
+          <SidebarIcon 
+            icon={<Zap size={22} />} 
+            active={activeTab === 'logs'} 
+            onClick={() => setActiveTab('logs')}
+          />
+          <SidebarIcon 
+            icon={<Settings size={22} />} 
+            active={activeTab === 'menu'} 
+            onClick={() => setActiveTab('menu')}
+          />
         </nav>
         <button 
           onClick={() => updateSettings({ darkMode: !settings.darkMode })}
@@ -317,7 +360,6 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 relative z-10 p-4 sm:p-6 lg:p-10 flex flex-col gap-6 overflow-y-auto md:overflow-hidden min-h-0 pb-32 md:pb-10">
-        {/* Header */}
         <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 shrink-0 mt-2 sm:mt-0">
           <div className="flex items-center gap-4">
             <div className="relative group cursor-pointer" onClick={() => setIsEditingName(true)}>
@@ -347,17 +389,29 @@ export default function App() {
                 {!isAuthReady ? (
                   <span className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-emerald-400 font-bold">
                     <Database size={12} />
-                    Local Storage Mode (Owned)
+                    Local Storage Mode
                   </span>
                 ) : user ? (
-                  <span className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-indigo-400 font-bold">
-                    <Cloud size={12} />
-                    {navigator.onLine ? 'Cloud Sync Active' : 'Offline Mode (Local)'}
+                  <span className={`hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-bold ${
+                    isCloudSyncing ? 'text-indigo-400' : hasPendingWrites ? 'text-amber-400' : 'text-emerald-400'
+                  }`}>
+                    {isCloudSyncing ? (
+                      <Zap size={12} className="animate-pulse" />
+                    ) : hasPendingWrites ? (
+                      <CloudOff size={12} />
+                    ) : (
+                      <Cloud size={12} />
+                    )}
+                    {isCloudSyncing 
+                      ? 'Syncing...' 
+                      : hasPendingWrites 
+                        ? 'Pending Changes' 
+                        : isOnline ? 'Synced' : 'Offline'}
                   </span>
                 ) : (
-                  <span className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-emerald-400/60 font-bold">
+                  <span className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-white/40 font-bold">
                     <ShieldCheck size={12} />
-                    {navigator.onLine ? 'Auto-Saved Local' : 'Offline Mode (Local)'}
+                    {isOnline ? 'Cloud Ready' : 'Local Only'}
                   </span>
                 )}
                 {!navigator.onLine && (
@@ -447,22 +501,6 @@ export default function App() {
                     <button 
                       onClick={() => {
                         setIsAddOptionsOpen(false);
-                        setIsBudgetFormOpen(true);
-                      }}
-                      className="w-full flex items-center gap-4 p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left"
-                    >
-                      <div className="p-3 rounded-xl bg-emerald-500/20 text-emerald-400">
-                        <Target size={20} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-white">{t('setBudget')}</p>
-                        <p className="text-[10px] text-white/40 uppercase tracking-widest">Manage Goals</p>
-                      </div>
-                    </button>
-
-                    <button 
-                      onClick={() => {
-                        setIsAddOptionsOpen(false);
                         setIsCalculatorOpen(true);
                       }}
                       className="w-full flex items-center gap-4 p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left"
@@ -473,6 +511,22 @@ export default function App() {
                       <div>
                         <p className="text-sm font-bold text-white">Scientific Calc</p>
                         <p className="text-[10px] text-white/40 uppercase tracking-widest">Advanced Math</p>
+                      </div>
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setIsAddOptionsOpen(false);
+                        setIsBudgetFormOpen(true);
+                      }}
+                      className="w-full flex items-center gap-4 p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all text-left"
+                    >
+                      <div className="p-3 rounded-xl bg-orange-500/20 text-orange-400">
+                        <Target size={20} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-white">{t('setBudget')}</p>
+                        <p className="text-[10px] text-white/40 uppercase tracking-widest">Monthly Limit</p>
                       </div>
                     </button>
 
@@ -540,9 +594,18 @@ export default function App() {
                     </div>
 
                     <div className="p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10">
-                      <div className="flex items-center gap-3 mb-2">
-                        <Cloud size={16} className="text-indigo-400" />
-                        <span className="text-xs font-bold uppercase tracking-widest text-indigo-400">{t('cloudSync')}</span>
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div className="flex items-center gap-3">
+                          <Cloud size={16} className={isOnline ? "text-indigo-400" : "text-white/20"} />
+                          <span className="text-xs font-bold uppercase tracking-widest text-indigo-400">{t('cloudSync')}</span>
+                        </div>
+                        <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-widest border ${
+                          isOnline 
+                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                            : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                        }`}>
+                          {isOnline ? 'Online' : 'Offline'}
+                        </div>
                       </div>
                       
                       {!isAuthReady ? (
@@ -564,9 +627,31 @@ export default function App() {
                               <p className="text-[9px] text-white/40 truncate">{user.email}</p>
                             </div>
                           </div>
-                          <p className="text-[10px] text-indigo-300/70 leading-relaxed">
-                            {t('syncEnabled')}
-                          </p>
+                          <div className="space-y-2">
+                            <p className="text-[10px] text-white/50 leading-relaxed font-mono">
+                              {isCloudSyncing ? (
+                                <span className="flex items-center gap-1.5 text-indigo-400">
+                                  <Zap size={10} className="animate-pulse" />
+                                  Syncing data...
+                                </span>
+                              ) : hasPendingWrites ? (
+                                <span className="flex items-center gap-1.5 text-amber-400">
+                                  <Zap size={10} />
+                                  Pending local changes
+                                </span>
+                              ) : lastCloudSync ? (
+                                <span className="flex items-center gap-1.5 opacity-60">
+                                  <Check size={10} className="text-emerald-400" />
+                                  Synced {format(new Date(lastCloudSync), 'h:mm a')}
+                                </span>
+                              ) : (
+                                <span className="opacity-40 italic">Not synced yet</span>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-indigo-300/70 leading-relaxed">
+                              {t('syncEnabled')}
+                            </p>
+                          </div>
                           <button 
                             onClick={logout}
                             className="w-full py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-rose-500/20"
@@ -589,6 +674,41 @@ export default function App() {
                           </button>
                         </div>
                       )}
+
+                      {user && accessToken && (
+                        <div className="p-4 mt-3 rounded-2xl bg-emerald-500/5 border border-emerald-500/10">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <Database size={16} className="text-emerald-400" />
+                              <span className="text-xs font-bold uppercase tracking-widest text-emerald-400">Google Drive Backup</span>
+                            </div>
+                            {isDriveSyncing && (
+                              <motion.div 
+                                animate={{ rotate: 360 }}
+                                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                              >
+                                <Zap size={14} className="text-emerald-400" />
+                              </motion.div>
+                            )}
+                          </div>
+                          
+                          <div className="space-y-3">
+                            <p className="text-[10px] text-white/50 leading-relaxed">
+                              {lastDriveSync 
+                                ? `Last synced: ${format(new Date(lastDriveSync), 'MMM d, h:mm a')}`
+                                : 'Your data is automatically backed up to your Google Drive.'}
+                            </p>
+                            <button 
+                              onClick={() => syncToGoogleDrive(accessToken)}
+                              disabled={isDriveSyncing}
+                              className="w-full flex items-center justify-center gap-2 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-emerald-500/20 disabled:opacity-50"
+                            >
+                              <Upload size={14} />
+                              {isDriveSyncing ? 'Syncing...' : 'Sync Now'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {installPrompt && (
@@ -608,20 +728,6 @@ export default function App() {
                         </button>
                       </div>
                     )}
-
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Target size={14} className="text-white/30" />
-                        <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest">{t('budgets')}</span>
-                      </div>
-                      <button 
-                        onClick={() => setIsBudgetFormOpen(true)}
-                        className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[11px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-indigo-500/20"
-                      >
-                        <Target size={16} />
-                        {t('setBudget')}
-                      </button>
-                    </div>
 
                     <div className="space-y-4">
                       <div className="flex items-center gap-2 mb-2">
@@ -660,18 +766,34 @@ export default function App() {
                           <Download size={16} className="text-indigo-400" />
                           {t('exportBackup')}
                         </button>
-                        <button 
-                          onClick={() => importInputRef.current?.click()}
-                          className="glass-button-ghost py-3 px-2 text-[10px] flex flex-col items-center gap-2 border-white/5"
-                        >
-                          <Upload size={16} className="text-emerald-400" />
-                          {t('importBackup')}
-                        </button>
+                        <div className="grid grid-cols-1 gap-2">
+                          <button 
+                            onClick={() => importInputRef.current?.click()}
+                            className="glass-button-ghost py-2 px-2 text-[9px] flex items-center justify-center gap-2 border-white/5"
+                          >
+                            <Upload size={12} className="text-emerald-400" />
+                            {t('importBackup')} (JSON)
+                          </button>
+                          <button 
+                            onClick={() => importExcelRef.current?.click()}
+                            className="glass-button-ghost py-2 px-2 text-[9px] flex items-center justify-center gap-2 border-white/5"
+                          >
+                            <FileText size={12} className="text-emerald-400" />
+                            Excel/CSV
+                          </button>
+                        </div>
                         <input 
                           type="file"
                           ref={importInputRef}
                           onChange={handleImportBackup}
                           accept=".json"
+                          className="hidden"
+                        />
+                        <input 
+                          type="file"
+                          ref={importExcelRef}
+                          onChange={handleImportExcel}
+                          accept=".xlsx,.xls,.csv"
                           className="hidden"
                         />
                       </div>
@@ -718,19 +840,26 @@ export default function App() {
                         </select>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-3 gap-3">
                         <button 
                           onClick={() => exportToExcel(getFilteredTransactionsForExport())}
-                          className="flex items-center justify-center gap-2 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-emerald-500/20"
+                          className="flex flex-col items-center justify-center gap-2 py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[9px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-emerald-500/20"
                         >
-                          <FileText size={14} />
+                          <FileText size={16} />
                           Excel
                         </button>
                         <button 
-                          onClick={() => exportToJSON(getFilteredTransactionsForExport())}
-                          className="flex items-center justify-center gap-2 py-2.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-indigo-500/20"
+                          onClick={() => exportToPDF(getFilteredTransactionsForExport())}
+                          className="flex flex-col items-center justify-center gap-2 py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[9px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-rose-500/20"
                         >
-                          <Database size={14} />
+                          <FileDown size={16} />
+                          PDF
+                        </button>
+                        <button 
+                          onClick={() => exportToJSON(getFilteredTransactionsForExport())}
+                          className="flex flex-col items-center justify-center gap-2 py-3 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-[9px] font-bold uppercase tracking-widest rounded-xl transition-colors border border-indigo-500/20"
+                        >
+                          <Database size={16} />
                           JSON
                         </button>
                       </div>
@@ -966,54 +1095,6 @@ export default function App() {
         <div className="grid grid-cols-12 gap-6 flex-1 min-h-0">
           {/* Main Feed */}
           <section className={`col-span-12 ${activeTab === 'home' ? 'lg:col-span-8 flex' : activeTab === 'stats' ? 'flex' : 'hidden'} flex-col gap-6 min-h-0`}>
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between px-2">
-                <h3 className="text-[10px] font-bold text-white/30 uppercase tracking-widest">
-                  {budgetViewState === 'trends' ? 'Budget Trends & Analytics' : budgetViewState === 'history' ? 'Budget Performance History' : 'Monthly Budget Tracking'}
-                </h3>
-                <div className="flex bg-white/5 p-1 rounded-xl border border-white/5">
-                  <button 
-                    onClick={() => setBudgetViewState('current')}
-                    className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all ${budgetViewState === 'current' ? 'bg-indigo-500 text-white shadow-lg' : 'text-white/40 hover:text-white'}`}
-                  >
-                    Current
-                  </button>
-                  <button 
-                    onClick={() => setBudgetViewState('history')}
-                    className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all ${budgetViewState === 'history' ? 'bg-indigo-500 text-white shadow-lg' : 'text-white/40 hover:text-white'}`}
-                  >
-                    History
-                  </button>
-                  <button 
-                    onClick={() => setBudgetViewState('trends')}
-                    className={`px-3 py-1 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all ${budgetViewState === 'trends' ? 'bg-indigo-500 text-white shadow-lg' : 'text-white/40 hover:text-white'}`}
-                  >
-                    Trends
-                  </button>
-                </div>
-              </div>
-              
-              {budgetViewState === 'history' ? (
-                <BudgetHistoryCard 
-                  performance={historicalBudgetPerformance}
-                  currencySymbol={currencySymbol}
-                />
-              ) : budgetViewState === 'trends' ? (
-                <BudgetTrends 
-                  historicalData={historicalBudgetPerformance}
-                  currencySymbol={currencySymbol}
-                />
-              ) : (
-                <BudgetCard 
-                  budgets={budgets}
-                  spendingThisMonth={spendingThisMonthPerCategory}
-                  currencySymbol={currencySymbol}
-                  language={settings.language}
-                  convertAmount={convertAmount}
-                  onSetBudget={() => setIsBudgetFormOpen(true)}
-                />
-              )}
-            </div>
             <GlassCard className="p-6 md:p-8 flex-1 overflow-hidden flex flex-col">
               <ChartsSection 
                 transactions={transactions} 
@@ -1023,12 +1104,20 @@ export default function App() {
                 previousCategoryData={spendingPreviousMonthPerCategory}
               />
             </GlassCard>
+            
+            {activeTab === 'home' && (
+              <AIInsightsCard 
+                transactions={transactions} 
+                userName={user ? user.displayName || 'User' : settings.name}
+                currencySymbol={currencySymbol}
+              />
+            )}
           </section>
 
           {/* Side Panels - History */}
           <aside className={`col-span-12 ${activeTab === 'home' ? 'lg:col-span-4 flex' : activeTab === 'logs' ? 'flex' : 'hidden'} flex-col gap-6 min-h-0`}>
             <GlassCard className="p-6 md:p-8 flex-1 min-h-[300px] flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between mb-4 shrink-0">
+               <div className="flex items-center justify-between mb-4 shrink-0">
                 <h3 className="font-bold text-lg text-white font-display">{t('recentTransactions')}</h3>
                 <div className="flex items-center gap-2">
                   <button 
@@ -1051,6 +1140,7 @@ export default function App() {
                   transactions={transactions} 
                   onDelete={deleteTransaction}
                   onBulkDelete={deleteMultipleTransactions}
+                  onBulkUpdate={updateMultipleTransactions}
                   onEdit={setEditingTransaction}
                   currencySymbol={currencySymbol}
                   language={settings.language}
@@ -1073,17 +1163,75 @@ export default function App() {
             </GlassCard>
           </aside>
         </div>
-      </main>
 
-      <BudgetForm
-        isOpen={isBudgetFormOpen}
-        onClose={() => setIsBudgetFormOpen(false)}
-        budgets={budgets}
-        onUpdateBudget={updateBudget}
-        onDeleteBudget={deleteBudget}
-        language={settings.language}
-        currencySymbol={currencySymbol}
-      />
+        {/* Budget Management View */}
+        <AnimatePresence>
+          {activeTab === 'stats' && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="flex flex-col gap-10 pb-10"
+            >
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-orange-500/10 text-orange-400 border border-orange-500/10">
+                      <Target size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-white font-display tracking-tight">Active Budgets</h3>
+                      <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] font-medium">Tracking {budgets.length} categories</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setIsBudgetFormOpen(true)}
+                    className="flex items-center gap-2 p-2 px-4 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-all font-bold text-xs uppercase tracking-widest"
+                  >
+                    <Plus size={16} />
+                    {t('setBudget')}
+                  </button>
+                </div>
+                
+                <BudgetCard 
+                  budgets={budgets}
+                  spendingThisMonth={spendingThisMonthPerCategory}
+                  currencySymbol={currencySymbol}
+                  language={settings.language}
+                  convertAmount={convertAmount}
+                  onSetBudget={() => setIsBudgetFormOpen(true)}
+                />
+              </div>
+
+              <div className="space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/10">
+                    <BarChart2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white font-display tracking-tight">Budget Analytics</h3>
+                    <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] font-medium">Trends & performance</p>
+                  </div>
+                </div>
+                <BudgetTrends historicalData={historicalBudgetPerformance} currencySymbol={currencySymbol} />
+              </div>
+
+              <div className="space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/10">
+                    <Calendar size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white font-display tracking-tight">Historical Performance</h3>
+                    <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] font-medium">Past month summaries</p>
+                  </div>
+                </div>
+                <BudgetHistoryCard performance={historicalBudgetPerformance} currencySymbol={currencySymbol} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </main>
 
       <ScientificCalculator 
         isOpen={isCalculatorOpen}
@@ -1109,14 +1257,33 @@ export default function App() {
         currencySymbol={currencySymbol}
         language={settings.language}
       />
+
+      <BudgetForm 
+        isOpen={isBudgetFormOpen}
+        onClose={() => setIsBudgetFormOpen(false)}
+        budgets={budgets}
+        onUpdateBudget={updateBudget}
+        onDeleteBudget={deleteBudget}
+        language={settings.language}
+        currencySymbol={currencySymbol}
+      />
       <NetworkStatus isSyncing={hasPendingWrites} />
     </div>
   );
 }
 
-function SidebarIcon({ icon, active = false }: { icon: ReactNode; active?: boolean }) {
+function SidebarIcon({ icon, active = false, onClick }: { icon: ReactNode; active?: boolean; onClick?: () => void }) {
   return (
-    <div className={`${active ? 'text-indigo-400' : 'text-slate-500 hover:text-white'} cursor-pointer transition-colors p-1`}>
+    <div 
+      onClick={onClick}
+      className={`${active ? 'text-indigo-400' : 'text-slate-500 hover:text-white'} cursor-pointer transition-colors p-1 relative group`}
+    >
+      {active && (
+        <motion.div 
+          layoutId="sidebar-active"
+          className="absolute -left-8 w-1 h-8 bg-indigo-500 rounded-r-full shadow-[0_0_15px_rgba(99,102,241,0.6)]"
+        />
+      )}
       {icon}
     </div>
   );

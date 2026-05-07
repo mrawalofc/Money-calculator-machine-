@@ -13,7 +13,13 @@ import {
   Square, 
   CheckSquare,
   User,
-  RotateCcw
+  RotateCcw,
+  ChevronDown,
+  ChevronUp,
+  Info,
+  AlertCircle,
+  X,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -22,6 +28,7 @@ interface TransactionListProps {
   transactions: Transaction[];
   onDelete: (id: string) => void;
   onBulkDelete?: (ids: string[]) => void;
+  onBulkUpdate?: (ids: string[], updates: Partial<Transaction>) => void;
   onEdit?: (transaction: Transaction) => void;
   currencySymbol?: string;
   language?: Language;
@@ -61,11 +68,17 @@ export const TransactionList = ({
   personSearch,
   setPersonSearch,
   lastDeleted,
-  onUndo
+  onUndo,
+  onBulkUpdate
 }: TransactionListProps) => {
   const t = (key: any) => getTranslation(language, key);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [localShowFilters, setLocalShowFilters] = useState(false);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkCategory, setBulkCategory] = useState<Category | null>(null);
+  const [bulkPerson, setBulkPerson] = useState('');
+  const [bulkNote, setBulkNote] = useState('');
   
   const showFilters = showFiltersProp !== undefined ? showFiltersProp : localShowFilters;
   const setShowFilters = setShowFiltersProp || setLocalShowFilters;
@@ -101,11 +114,15 @@ export const TransactionList = ({
   };
 
   const handleBulkEdit = () => {
-    if (selectedIds.length === 1) {
-      const transaction = transactions.find(t => t.id === selectedIds[0]);
-      if (transaction) {
-        onEdit?.(transaction);
-        setSelectedIds([]);
+    if (selectedIds.length > 0) {
+      if (selectedIds.length === 1) {
+        const transaction = transactions.find(t => t.id === selectedIds[0]);
+        if (transaction) {
+          onEdit?.(transaction);
+          setSelectedIds([]);
+        }
+      } else {
+        setShowBulkEdit(true);
       }
     }
   };
@@ -173,9 +190,12 @@ export const TransactionList = ({
           <div className="flex items-center gap-2">
             <button 
               onClick={toggleSelectAll}
-              className={`p-2 rounded-xl border transition-all ${selectedIds.length > 0 ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-400' : 'bg-white/5 border-white/10 text-white/20'}`}
+              className={`p-2 rounded-xl border transition-all flex items-center gap-2 ${selectedIds.length > 0 ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-400' : 'bg-white/5 border-white/10 text-white/20'}`}
             >
               {selectedIds.length === filtered.length && filtered.length > 0 ? <CheckSquare size={18} /> : <Square size={18} />}
+              <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">
+                {selectedIds.length === filtered.length ? 'Deselect All' : 'Select All'}
+              </span>
             </button>
             {selectedIds.length > 0 && (
               <motion.div 
@@ -183,15 +203,18 @@ export const TransactionList = ({
                 animate={{ opacity: 1, x: 0 }}
                 className="flex items-center gap-2"
               >
-                {selectedIds.length === 1 && (
-                  <button 
-                    onClick={handleBulkEdit}
-                    className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all inline-flex items-center gap-2"
-                  >
-                    <Pencil size={12} />
-                    {t('rewrite')}
-                  </button>
-                )}
+                <div className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 hidden lg:flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">
+                    {t('itemsSelected').replace('{count}', selectedIds.length.toString())}
+                  </span>
+                </div>
+                <button 
+                  onClick={handleBulkEdit}
+                  className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all inline-flex items-center gap-2"
+                >
+                  <Pencil size={12} />
+                  {selectedIds.length === 1 ? t('rewrite') : t('bulkEdit')}
+                </button>
                 <button 
                   onClick={handleBulkDelete}
                   className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all inline-flex items-center gap-2"
@@ -344,100 +367,201 @@ export const TransactionList = ({
         </AnimatePresence>
 
         <AnimatePresence mode="popLayout">
-          {filtered.map((transaction) => (
-            <motion.div
-              layout
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              key={transaction.id}
-              className="relative overflow-hidden rounded-[20px]"
-            >
-              {/* Swipe Background Actions */}
-              <div className="absolute inset-0 flex justify-between items-center px-6">
-                <div className="flex items-center gap-2 text-rose-500 font-bold text-[10px] uppercase tracking-widest">
-                  <Trash2 size={16} />
-                  <span>{t('delete')}</span>
-                </div>
-                <div className="flex items-center gap-2 text-indigo-400 font-bold text-[10px] uppercase tracking-widest">
-                  <span>{t('rewrite')}</span>
-                  <Pencil size={16} />
-                </div>
-              </div>
+          {filtered.map((transaction) => {
+            const isSelected = selectedIds.includes(transaction.id);
+            const isExpanded = expandedId === transaction.id;
+            const hasLongNote = (transaction.note && transaction.note.length > 25);
+            const hasLongPerson = (transaction.personName && transaction.personName.length > 15);
+            const canExpand = hasLongNote || hasLongPerson || !!transaction.personName;
 
+            return (
               <motion.div
-                drag="x"
-                dragConstraints={{ left: -100, right: 100 }}
-                dragElastic={0.1}
-                dragSnapToOrigin
-                onDragEnd={(_, info) => {
-                  if (info.offset.x > 80) {
-                    onDelete(transaction.id);
-                  } else if (info.offset.x < -80) {
-                    onEdit?.(transaction);
-                  }
-                }}
-                onClick={() => toggleSelect(transaction.id)}
-                className={`relative z-10 group flex items-center justify-between p-4 bg-[#121214] hover:bg-white/[0.05] rounded-[20px] transition-all duration-300 border ${selectedIds.includes(transaction.id) ? 'border-indigo-500/30 bg-indigo-500/5' : 'border-white/[0.03]'} cursor-pointer active:scale-[0.98] select-none`}
+                layout
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                key={transaction.id}
+                className="relative overflow-hidden rounded-[20px]"
               >
-                <div className="flex items-center gap-4">
-                  <div className="relative">
-                    <div 
-                      className="w-12 h-12 rounded-2xl flex items-center justify-center text-lg shadow-inner"
-                      style={{ backgroundColor: `${CATEGORY_COLORS[transaction.category]}10`, color: CATEGORY_COLORS[transaction.category] }}
-                    >
-                      <CategoryIcon category={transaction.category} type={transaction.type} />
+                {/* Swipe Background Actions */}
+                <div className="absolute inset-0 flex justify-between items-center px-6">
+                  <div className="flex items-center gap-2 text-rose-500 font-bold text-[10px] uppercase tracking-widest">
+                    <Trash2 size={16} />
+                    <span>{t('delete')}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-indigo-400 font-bold text-[10px] uppercase tracking-widest">
+                    <span>{t('rewrite')}</span>
+                    <Pencil size={16} />
+                  </div>
+                </div>
+
+                <motion.div
+                  drag="x"
+                  dragConstraints={{ left: -100, right: 100 }}
+                  dragElastic={0.1}
+                  dragSnapToOrigin
+                  onDragEnd={(_, info) => {
+                    if (info.offset.x > 80) {
+                      onDelete(transaction.id);
+                    } else if (info.offset.x < -80) {
+                      onEdit?.(transaction);
+                    }
+                  }}
+                  onClick={() => {
+                    if (selectedIds.length > 0) {
+                      toggleSelect(transaction.id);
+                    } else if (canExpand) {
+                      setExpandedId(isExpanded ? null : transaction.id);
+                    } else {
+                      toggleSelect(transaction.id);
+                    }
+                  }}
+                  className={`relative z-10 group flex flex-col p-4 bg-[#121214] hover:bg-white/[0.05] rounded-[20px] transition-all duration-300 border ${isSelected ? 'border-indigo-500/30 bg-indigo-500/5' : 'border-white/[0.03]'} cursor-pointer active:scale-[0.98] select-none`}
+                >
+                  <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-4">
+                      <div className="relative">
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelect(transaction.id);
+                          }}
+                          className="w-12 h-12 rounded-2xl flex items-center justify-center text-lg shadow-inner cursor-pointer hover:scale-105 active:scale-95 transition-transform"
+                          style={{ backgroundColor: `${CATEGORY_COLORS[transaction.category]}10`, color: CATEGORY_COLORS[transaction.category] }}
+                        >
+                          <CategoryIcon category={transaction.category} type={transaction.type} />
+                        </div>
+                        {isSelected && (
+                          <motion.div 
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="absolute -top-1 -right-1 bg-indigo-500 text-white w-5 h-5 rounded-lg flex items-center justify-center shadow-lg border-2 border-[#121214]"
+                          >
+                            <Check size={12} strokeWidth={4} />
+                          </motion.div>
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                           <div 
+                             className="w-4 h-4 rounded-md flex items-center justify-center"
+                             style={{ backgroundColor: `${CATEGORY_COLORS[transaction.category]}15`, color: CATEGORY_COLORS[transaction.category] }}
+                           >
+                             <CategoryIcon category={transaction.category} type={transaction.type} size={10} />
+                           </div>
+                           <h4 className="font-semibold text-slate-100 text-sm tracking-tight">{transaction.category}</h4>
+                           {canExpand && !isExpanded && (
+                             <motion.div 
+                               initial={{ opacity: 0 }}
+                               animate={{ opacity: 1 }}
+                               className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded"
+                             >
+                               <Info size={8} />
+                               Details
+                             </motion.div>
+                           )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-white/20">{format(new Date(transaction.date), 'MMM dd')}</span>
+                          
+                          {!isExpanded && (
+                            <>
+                              {transaction.personName && (
+                                <>
+                                  <span className="w-1 h-1 bg-white/10 rounded-full" />
+                                  <span className="text-[10px] font-medium text-indigo-400 truncate max-w-[100px]">{transaction.personName}</span>
+                                </>
+                              )}
+                              <span className="w-1 h-1 bg-white/10 rounded-full" />
+                              <span className="text-[10px] font-medium text-white/40 truncate max-w-[120px]">{transaction.note || 'General'}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    {selectedIds.includes(transaction.id) && (
-                      <motion.div 
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        className="absolute -top-1 -right-1 bg-indigo-500 text-white w-5 h-5 rounded-lg flex items-center justify-center shadow-lg border-2 border-[#121214]"
+
+                    <div className="flex items-center gap-2">
+                      <span className={`font-display font-semibold text-base tracking-tight ${
+                        (transaction.type === 'income' || transaction.type === 'borrowed' || transaction.type === 'lent_repayment') ? 'text-emerald-400' : 
+                        (transaction.type === 'lent' || transaction.type === 'expense' || transaction.type === 'borrowed_repayment') ? 'text-rose-400' : 'text-slate-100'
+                      }`}>
+                        {(transaction.type === 'income' || transaction.type === 'borrowed' || transaction.type === 'lent_repayment') ? '+' : '-'}
+                        {SUPPORTED_CURRENCIES.find(c => c.code === transaction.currency)?.symbol || currencySymbol}
+                        {transaction.amount.toLocaleString()}
+                      </span>
+                      <div className="w-6 flex flex-col items-center justify-center gap-1">
+                         <div className={`w-2 h-2 rounded-full transition-all ${isSelected ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)] scale-125' : 'bg-white/5'}`} />
+                         {canExpand && (
+                           <motion.div
+                             animate={{ rotate: isExpanded ? 180 : 0 }}
+                             className="text-white/20"
+                           >
+                             <ChevronDown size={14} />
+                           </motion.div>
+                         )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {isExpanded && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
                       >
-                        <Check size={12} strokeWidth={4} />
+                        <div className="mt-4 pt-4 border-t border-white/[0.03] space-y-3">
+                          {transaction.personName && (
+                            <div className="flex items-center gap-3">
+                              <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                                <User size={12} />
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-[8px] font-bold text-white/20 uppercase tracking-widest">Person</span>
+                                <span className="text-xs text-indigo-300 font-medium">{transaction.personName}</span>
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex items-start gap-3">
+                            <div className="p-1.5 rounded-lg bg-white/5 text-white/40 mt-0.5">
+                              <Info size={12} />
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-[8px] font-bold text-white/20 uppercase tracking-widest">Note</span>
+                              <p className="text-xs text-white/70 leading-relaxed italic">
+                                {transaction.note || 'No additional notes provided for this transaction.'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-end gap-2 pt-2">
+                             <button 
+                               onClick={(e) => {
+                                 e.stopPropagation();
+                                 onEdit?.(transaction);
+                               }}
+                               className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/40 hover:text-white transition-all border border-white/5"
+                             >
+                               <Pencil size={14} />
+                             </button>
+                             <button 
+                               onClick={(e) => {
+                                 e.stopPropagation();
+                                 onDelete(transaction.id);
+                               }}
+                               className="p-2 rounded-xl bg-rose-500/5 hover:bg-rose-500/10 text-rose-400/40 hover:text-rose-400 transition-all border border-rose-500/5"
+                             >
+                               <Trash2 size={14} />
+                             </button>
+                          </div>
+                        </div>
                       </motion.div>
                     )}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                       <div 
-                         className="w-4 h-4 rounded-md flex items-center justify-center"
-                         style={{ backgroundColor: `${CATEGORY_COLORS[transaction.category]}15`, color: CATEGORY_COLORS[transaction.category] }}
-                       >
-                         <CategoryIcon category={transaction.category} type={transaction.type} size={10} />
-                       </div>
-                       <h4 className="font-semibold text-slate-100 text-sm tracking-tight">{transaction.category}</h4>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-white/20">{format(new Date(transaction.date), 'MMM dd')}</span>
-                      {transaction.personName && (
-                        <>
-                          <span className="w-1 h-1 bg-white/10 rounded-full" />
-                          <span className="text-[10px] font-medium text-indigo-400 truncate max-w-[100px]">{transaction.personName}</span>
-                        </>
-                      )}
-                      <span className="w-1 h-1 bg-white/10 rounded-full" />
-                      <span className="text-[10px] font-medium text-white/40 truncate max-w-[120px]">{transaction.note || 'General'}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className={`font-display font-semibold text-base tracking-tight ${
-                    (transaction.type === 'income' || transaction.type === 'borrowed' || transaction.type === 'lent_repayment') ? 'text-emerald-400' : 
-                    (transaction.type === 'lent' || transaction.type === 'expense' || transaction.type === 'borrowed_repayment') ? 'text-rose-400' : 'text-slate-100'
-                  }`}>
-                    {(transaction.type === 'income' || transaction.type === 'borrowed' || transaction.type === 'lent_repayment') ? '+' : '-'}
-                    {SUPPORTED_CURRENCIES.find(c => c.code === transaction.currency)?.symbol || currencySymbol}
-                    {transaction.amount.toLocaleString()}
-                  </span>
-                  <div className="w-6 flex items-center justify-center">
-                     <div className={`w-2 h-2 rounded-full transition-all ${selectedIds.includes(transaction.id) ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)] scale-125' : 'bg-white/5'}`} />
-                  </div>
-                </div>
+                  </AnimatePresence>
+                </motion.div>
               </motion.div>
-            </motion.div>
-          ))}
+            );
+          })}
         </AnimatePresence>
         
         {filtered.length === 0 && (
@@ -447,6 +571,113 @@ export const TransactionList = ({
           </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {showBulkEdit && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="w-full max-w-md bg-[#121214] border border-white/10 rounded-[32px] overflow-hidden shadow-2xl"
+            >
+              <div className="p-6 border-b border-white/5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-display font-bold text-slate-100">{t('bulkEdit')}</h3>
+                    <p className="text-[10px] text-white/40 font-bold uppercase tracking-widest mt-1">
+                      Editing {selectedIds.length} Transactions
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setShowBulkEdit(false)}
+                    className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/40 hover:text-white transition-all"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/10 flex gap-3">
+                  <AlertCircle size={18} className="text-amber-400 shrink-0" />
+                  <p className="text-[10px] text-amber-200/60 leading-relaxed uppercase font-bold tracking-wider">
+                    Only fields you modify will be applied to all selected items. Others will remain unchanged.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-white/20 uppercase tracking-widest pl-1">{t('category')}</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {(['Food', 'Commute', 'Rent', 'Social', 'Shopping', 'Health', 'Travel', 'Others'] as Category[]).map(cat => (
+                        <button
+                          key={cat}
+                          onClick={() => setBulkCategory(cat)}
+                          className={`flex flex-col items-center gap-1.5 p-2 rounded-xl border transition-all group ${bulkCategory === cat ? 'bg-indigo-500 border-indigo-500' : 'bg-white/5 border-white/5 hover:bg-indigo-500/10'}`}
+                        >
+                          <CategoryIcon category={cat} type="expense" size={14} className={`transition-transform ${bulkCategory === cat ? 'scale-110 text-white' : 'group-hover:scale-110'}`} />
+                          <span className={`text-[8px] font-bold uppercase tracking-tight ${bulkCategory === cat ? 'text-white' : 'text-white/40 group-hover:text-white/80'}`}>{cat}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-white/20 uppercase tracking-widest pl-1">{t('personName')}</label>
+                    <input 
+                      type="text"
+                      value={bulkPerson}
+                      onChange={(e) => setBulkPerson(e.target.value)}
+                      placeholder="Enter name to apply to all (optional)"
+                      className="glass-input w-full py-3 px-4 text-xs border-white/5"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-white/20 uppercase tracking-widest pl-1">{t('note')}</label>
+                    <textarea 
+                      value={bulkNote}
+                      onChange={(e) => setBulkNote(e.target.value)}
+                      placeholder="Enter note to apply to all (optional)"
+                      className="glass-input w-full py-3 px-4 text-xs border-white/5 min-h-[80px]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 bg-white/[0.02] border-t border-white/5 flex gap-3">
+                <button 
+                  onClick={() => setShowBulkEdit(false)}
+                  className="flex-1 py-4 rounded-2xl bg-white/5 hover:bg-white/10 text-white text-[11px] font-bold uppercase tracking-widest transition-all"
+                >
+                  {t('cancel')}
+                </button>
+                <button 
+                  onClick={() => {
+                    const updates: Partial<Transaction> = {};
+                    if (bulkCategory) updates.category = bulkCategory;
+                    if (bulkPerson) updates.personName = bulkPerson;
+                    if (bulkNote) updates.note = bulkNote;
+                    
+                    if (Object.keys(updates).length > 0) {
+                      onBulkUpdate?.(selectedIds, updates);
+                      setSelectedIds([]);
+                      setShowBulkEdit(false);
+                      setBulkCategory(null);
+                      setBulkPerson('');
+                      setBulkNote('');
+                    }
+                  }}
+                  className="flex-1 py-4 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white text-[11px] font-bold uppercase tracking-widest shadow-xl shadow-indigo-500/20 transition-all"
+                >
+                  {t('save')}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -1,6 +1,6 @@
 {
-  "name": "Remix: Money calculator ",
-  "description": "A sophisticated AI-powered expense tracker with beautiful data visualizations, glassmorphic design, and smart financial insights.",
+  "name": "Aurelius Finance",
+  "description": "Secure, private-first financial management with bulk editing capabilities. Your data stays on your device (IndexedDB) or optionally syncs to your private cloud. Advanced visualizations, AI insights, and professional PDF/Excel reporting.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

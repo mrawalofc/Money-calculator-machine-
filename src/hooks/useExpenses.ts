@@ -1,9 +1,18 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Transaction, UserSettings, Category, Budget, CONVERSION_RATES } from '../types';
+import { Transaction, UserSettings, Category, Budget, CONVERSION_RATES, SUPPORTED_CURRENCIES } from '../types';
 import * as XLSX from 'xlsx';
-import { subMonths } from 'date-fns';
+import { subMonths, format } from 'date-fns';
+import { jsPDF } from 'jspdf';
+import 'jspdf-autotable';
 import { db, auth, isFirebaseReady, testConnection } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
+
+// Extend jsPDF with autotable types for TypeScript
+declare module 'jspdf' {
+  interface jsPDF {
+    autoTable: (options: any) => jsPDF;
+  }
+}
 import { 
   collection, 
   onSnapshot, 
@@ -64,7 +73,22 @@ export function useExpenses() {
   });
 
   const [lastDeleted, setLastDeleted] = useState<Transaction[] | null>(null);
-  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [isTransactionsSyncing, setIsTransactionsSyncing] = useState(false);
+  const [isBudgetsSyncing, setIsBudgetsSyncing] = useState(false);
+  const [isSettingsSyncing, setIsSettingsSyncing] = useState(false);
+  
+  const [isOnline, setIsOnline] = useState(typeof window !== 'undefined' ? window.navigator.onLine : true);
+  const [lastCloudSync, setLastCloudSync] = useState<number | null>(() => {
+    const local = typeof window !== 'undefined' ? localStorage.getItem('aurelius_last_cloud_sync') : null;
+    return local ? parseInt(local) : null;
+  });
+
+  const isCloudSyncing = isTransactionsSyncing || isBudgetsSyncing || isSettingsSyncing;
+  const [isDriveSyncing, setIsDriveSyncing] = useState(false);
+  const [lastDriveSync, setLastDriveSync] = useState<number | null>(() => {
+    const local = typeof window !== 'undefined' ? localStorage.getItem('aurelius_last_drive_sync') : null;
+    return local ? parseInt(local) : null;
+  });
   const [hasPendingWrites, setHasPendingWrites] = useState(false);
 
   // Save to localStorage whenever data changes
@@ -79,6 +103,84 @@ export function useExpenses() {
   useEffect(() => {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }, [settings]);
+
+  useEffect(() => {
+    if (lastDriveSync) {
+      localStorage.setItem('aurelius_last_drive_sync', lastDriveSync.toString());
+    }
+  }, [lastDriveSync]);
+
+  useEffect(() => {
+    if (lastCloudSync) {
+      localStorage.setItem('aurelius_last_cloud_sync', lastCloudSync.toString());
+    }
+  }, [lastCloudSync]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const syncToGoogleDrive = async (token: string) => {
+    if (!token) return;
+    setIsDriveSyncing(true);
+    try {
+      const backupData = {
+        app: "Aurelius Finance",
+        timestamp: new Date().toISOString(),
+        transactions,
+        settings,
+        budgets
+      };
+
+      // 1. Search for existing file
+      const searchRes = await fetch('https://www.googleapis.com/drive/v3/files?q=name="aurelius_backup.json"&spaces=drive', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const searchData = await searchRes.json();
+      const existingFile = searchData.files?.[0];
+
+      const metadata = {
+        name: 'aurelius_backup.json',
+        mimeType: 'application/json'
+      };
+
+      const formData = new FormData();
+      formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      formData.append('file', new Blob([JSON.stringify(backupData)], { type: 'application/json' }));
+
+      if (existingFile) {
+        // Update existing
+        await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=multipart`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        });
+      } else {
+        // Create new
+        await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        });
+      }
+
+      setLastDriveSync(Date.now());
+      console.log('Google Drive sync successful');
+    } catch (error) {
+      console.error('Google Drive sync failed:', error);
+    } finally {
+      setIsDriveSyncing(false);
+    }
+  };
 
   const convertAmount = (amount: number, from: string, to: string) => {
     if (from === to) return amount;
@@ -102,9 +204,12 @@ export function useExpenses() {
 
   // Sync Transactions with Firestore
   useEffect(() => {
-    if (!user || !isFirebaseReady()) return;
+    if (!user || !isFirebaseReady()) {
+      setIsTransactionsSyncing(false);
+      return;
+    }
 
-    setIsCloudSyncing(true);
+    setIsTransactionsSyncing(true);
     const path = `users/${user.uid}/transactions`;
     const q = query(
       collection(db, 'users', user.uid, 'transactions'),
@@ -113,15 +218,33 @@ export function useExpenses() {
 
     const unsubscribe = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
       const cloudTransactions = snapshot.docs.map(doc => doc.data() as Transaction);
-      setTransactions(cloudTransactions);
-      setIsCloudSyncing(snapshot.metadata.fromCache);
+      
+      // Initial migration: If cloud is empty but local has data, upload local data
+      if (snapshot.empty && transactions.length > 0 && !snapshot.metadata.hasPendingWrites) {
+        console.log("Migrating local transactions to cloud...");
+        const batch = writeBatch(db);
+        transactions.forEach(t => {
+          batch.set(doc(db, 'users', user.uid, 'transactions', t.id), cleanData({
+            ...t,
+            userId: user.uid
+          }));
+        });
+        batch.commit().catch(err => console.error("Migration error:", err));
+      } else {
+        setTransactions(cloudTransactions);
+      }
+      
+      setIsTransactionsSyncing(snapshot.metadata.fromCache);
       setHasPendingWrites(snapshot.metadata.hasPendingWrites);
+      if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+        setLastCloudSync(Date.now());
+      }
     }, (error) => {
       if (error.code === 'permission-denied') {
         handleFirestoreError(error, OperationType.LIST, path);
       }
-      console.error("Firestore sync error:", error);
-      setIsCloudSyncing(false);
+      console.error("Firestore transaction sync error:", error);
+      setIsTransactionsSyncing(false);
       setHasPendingWrites(false);
     });
 
@@ -130,18 +253,45 @@ export function useExpenses() {
 
   // Sync Budgets with Firestore
   useEffect(() => {
-    if (!user || !isFirebaseReady()) return;
+    if (!user || !isFirebaseReady()) {
+      setIsBudgetsSyncing(false);
+      return;
+    }
 
+    setIsBudgetsSyncing(true);
     const path = `users/${user.uid}/budgets`;
     const q = collection(db, 'users', user.uid, 'budgets');
+    
     const unsubscribe = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
       const cloudBudgets = snapshot.docs.map(doc => doc.data() as Budget);
-      setBudgets(cloudBudgets);
+      
+      // Initial migration: If cloud is empty but local has data, upload local data
+      if (snapshot.empty && budgets.length > 0 && !snapshot.metadata.hasPendingWrites) {
+        console.log("Migrating local budgets to cloud...");
+        const batch = writeBatch(db);
+        budgets.forEach(b => {
+          // Use category as doc ID as per updateBudget implementation
+          batch.set(doc(db, 'users', user.uid, 'budgets', b.category), cleanData({
+            ...b,
+            userId: user.uid
+          }));
+        });
+        batch.commit().catch(err => console.error("Budget migration error:", err));
+      } else {
+        setBudgets(cloudBudgets);
+      }
+      
+      setIsBudgetsSyncing(snapshot.metadata.fromCache);
       setHasPendingWrites(snapshot.metadata.hasPendingWrites);
+      if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+        setLastCloudSync(Date.now());
+      }
     }, (error) => {
       if (error.code === 'permission-denied') {
         handleFirestoreError(error, OperationType.LIST, path);
       }
+      console.error("Firestore budget sync error:", error);
+      setIsBudgetsSyncing(false);
     });
 
     return () => unsubscribe();
@@ -149,19 +299,36 @@ export function useExpenses() {
 
   // Sync Settings with Firestore
   useEffect(() => {
-    if (!user || !isFirebaseReady()) return;
+    if (!user || !isFirebaseReady()) {
+      setIsSettingsSyncing(false);
+      return;
+    }
 
+    setIsSettingsSyncing(true);
     const path = `users/${user.uid}/settings/current`;
     const settingsDoc = doc(db, 'users', user.uid, 'settings', 'current');
-    const unsubscribe = onSnapshot(settingsDoc, { includeMetadataChanges: true }, (snapshot) => {
+    
+    const unsubscribe = onSnapshot(settingsDoc, { includeMetadataChanges: true }, (snapshot: any) => {
       if (snapshot.exists()) {
         setSettings(snapshot.data() as UserSettings);
+      } else if (!snapshot.metadata.hasPendingWrites && settings.name !== 'Guest User') {
+        // Migration: If cloud settings don't exist but local settings have been customized
+        console.log("Migrating local settings to cloud...");
+        setDoc(settingsDoc, cleanData({ ...settings, userId: user.uid }), { merge: true })
+          .catch(err => console.error("Settings migration error:", err));
       }
+      
+      setIsSettingsSyncing(snapshot.metadata.fromCache);
       setHasPendingWrites(snapshot.metadata.hasPendingWrites);
+      if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+        setLastCloudSync(Date.now());
+      }
     }, (error) => {
       if (error.code === 'permission-denied') {
         handleFirestoreError(error, OperationType.GET, path);
       }
+      console.error("Firestore settings sync error:", error);
+      setIsSettingsSyncing(false);
     });
 
     return () => unsubscribe();
@@ -296,20 +463,23 @@ export function useExpenses() {
     }
   };
 
-  const updateSettings = async (updates: Partial<UserSettings>) => {
+  const updateMultipleTransactions = async (ids: string[], updates: Partial<Transaction>) => {
     if (user && isFirebaseReady()) {
-      const path = `users/${user.uid}/settings/current`;
       try {
-        const settingsRef = doc(db, 'users', user.uid, 'settings', 'current');
-        await setDoc(settingsRef, cleanData({ ...updates, userId: user.uid }), { merge: true });
+        const batch = writeBatch(db);
+        ids.forEach(id => {
+          const transRef = doc(db, 'users', user.uid, 'transactions', id);
+          batch.set(transRef, cleanData(updates), { merge: true });
+        });
+        await batch.commit();
       } catch (error: any) {
         if (error.code === 'permission-denied') {
-          handleFirestoreError(error, OperationType.UPDATE, path);
+          handleFirestoreError(error, OperationType.WRITE, 'batch-update');
         }
-        console.error("Failed to update settings in cloud:", error);
+        console.error("Failed to bulk update in cloud:", error);
       }
     } else {
-      setSettings(prev => ({ ...prev, ...updates }));
+      setTransactions(prev => prev.map(t => ids.includes(t.id) ? { ...t, ...updates } : t));
     }
   };
 
@@ -355,6 +525,22 @@ export function useExpenses() {
     }
   };
 
+  const updateSettings = async (updates: Partial<UserSettings>) => {
+    if (user && isFirebaseReady()) {
+      const path = `users/${user.uid}/settings/current`;
+      try {
+        const settingsRef = doc(db, 'users', user.uid, 'settings', 'current');
+        await setDoc(settingsRef, cleanData({ ...updates, userId: user.uid }), { merge: true });
+      } catch (error: any) {
+        if (error.code === 'permission-denied') {
+          handleFirestoreError(error, OperationType.UPDATE, path);
+        }
+        console.error("Failed to update settings in cloud:", error);
+      }
+    } else {
+      setSettings(prev => ({ ...prev, ...updates }));
+    }
+  };
 
   const summary = useMemo(() => {
     const realIncome = transactions
@@ -571,6 +757,104 @@ export function useExpenses() {
     URL.revokeObjectURL(url);
   };
 
+  const exportToPDF = (customTransactions?: Transaction[]) => {
+    const listToExport = (customTransactions || transactions).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    if (listToExport.length === 0) return;
+
+    const doc = new jsPDF();
+    const currency = SUPPORTED_CURRENCIES.find(c => c.code === settings.currency)?.symbol || '$';
+    
+    // Header
+    doc.setFontSize(22);
+    doc.setTextColor(30, 30, 30);
+    doc.text("Aurelius Finance Report", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Generated on: ${format(new Date(), 'PPpp')}`, 14, 30);
+    doc.text(`User: ${settings.name}`, 14, 35);
+    
+    // Table
+    const tableData = listToExport.map(t => [
+      format(new Date(t.date), 'MMM dd, yyyy'),
+      t.type.toUpperCase(),
+      t.category,
+      t.note || '-',
+      t.personName || '-',
+      `${SUPPORTED_CURRENCIES.find(c => c.code === t.currency)?.symbol || currency}${t.amount.toLocaleString()}`
+    ]);
+
+    doc.autoTable({
+      startY: 45,
+      head: [['Date', 'Type', 'Category', 'Note', 'Person', 'Amount']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
+      styles: { fontSize: 9 },
+      alternateRowStyles: { fillColor: [245, 245, 245] }
+    });
+
+    const finalY = (doc as any).lastAutoTable.cursor.y;
+    doc.setFontSize(12);
+    doc.setTextColor(30, 30, 30);
+    doc.text(`Summary:`, 14, finalY + 15);
+    doc.setFontSize(10);
+    doc.text(`Income: ${currency}${summary.income.toLocaleString()}`, 14, finalY + 22);
+    doc.text(`Expenses: ${currency}${summary.expenses.toLocaleString()}`, 14, finalY + 28);
+    doc.text(`Net Impact: ${currency}${summary.savings.toLocaleString()}`, 14, finalY + 34);
+
+    doc.save(`Aurelius_Report_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+  };
+
+  const importFromExcel = async (file: File) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet);
+
+        const newTransactions: Transaction[] = json.map((row: any) => ({
+          id: crypto.randomUUID(),
+          date: row.Date || row.date || format(new Date(), 'yyyy-MM-dd'),
+          type: (row.Type || row.type || 'expense').toLowerCase(),
+          category: row.Category || row.category || 'Other',
+          amount: parseFloat(row.Amount || row.amount || 0),
+          note: row.Note || row.note || '',
+          personName: row.Person || row.person || '',
+          currency: settings.currency,
+          createdAt: Date.now()
+        })).filter(t => t.amount > 0);
+
+        if (newTransactions.length === 0) {
+          alert('No valid transactions found in file.');
+          return;
+        }
+
+        const updatedTransactions = [...newTransactions, ...transactions]
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        
+        setTransactions(updatedTransactions);
+
+        if (user && isFirebaseReady()) {
+          const batch = writeBatch(db);
+          newTransactions.forEach(t => {
+            batch.set(doc(db, 'users', user.uid, 'transactions', t.id), cleanData({ ...t, userId: user.uid }));
+          });
+          await batch.commit();
+        }
+
+        alert(`Successfully imported ${newTransactions.length} transactions from Excel/CSV!`);
+      } catch (err) {
+        console.error('Excel Import error:', err);
+        alert('Failed to parse file. Ensure headers are: Date, Type, Category, Amount, Note, Person');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const importFromJSON = async (file: File) => {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -634,14 +918,22 @@ export function useExpenses() {
     lentPerPerson,
     borrowedPerPerson,
     updateTransaction,
+    updateMultipleTransactions,
     updateSettings,
     updateBudget,
     deleteBudget,
     exportToExcel,
+    exportToPDF,
     exportToJSON,
     importFromJSON,
+    importFromExcel,
     convertAmount,
+    syncToGoogleDrive,
     isCloudSyncing,
+    isDriveSyncing,
+    lastDriveSync,
+    lastCloudSync,
+    isOnline,
     hasPendingWrites
   };
 }

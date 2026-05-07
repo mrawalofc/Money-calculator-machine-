@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Target, Plus, Trash2 } from 'lucide-react';
-import { Category, CATEGORIES, Budget, CATEGORY_COLORS, Language, SUPPORTED_CURRENCIES } from '../types';
+import { X, Target, Save, Trash2, AlertCircle } from 'lucide-react';
+import { Category, CATEGORIES, Budget, Language, SUPPORTED_CURRENCIES } from '../types';
 import { getTranslation } from '../translations';
-import { CategoryIcon } from './CategoryIcon';
+import { GlassCard } from './ui/GlassCard';
 
 interface BudgetFormProps {
   isOpen: boolean;
@@ -21,149 +21,151 @@ export const BudgetForm = ({
   budgets, 
   onUpdateBudget, 
   onDeleteBudget, 
-  language, 
+  language,
   currencySymbol 
 }: BudgetFormProps) => {
-  const t = (key: any) => getTranslation(language, key);
   const [selectedCategory, setSelectedCategory] = useState<Category>(CATEGORIES[0]);
   const [limit, setLimit] = useState('');
-  const [currency, setCurrency] = useState(SUPPORTED_CURRENCIES[0].code);
+  const [currency, setCurrency] = useState('USD');
+  const t = (key: any) => getTranslation(language, key);
+
+  // Load existing budget if category changes
+  useEffect(() => {
+    const existing = budgets.find(b => b.category === selectedCategory);
+    if (existing) {
+      setLimit(existing.limit.toString());
+      setCurrency(existing.currency || 'USD');
+    } else {
+      setLimit('');
+    }
+  }, [selectedCategory, budgets]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!limit || isNaN(Number(limit)) || Number(limit) <= 0) return;
+    const limitNum = parseFloat(limit);
+    if (isNaN(limitNum) || limitNum <= 0) return;
 
     onUpdateBudget({
       category: selectedCategory,
-      limit: Number(limit),
-      currency: currency,
+      limit: limitNum,
+      currency,
       period: 'monthly'
     });
-    setLimit('');
+    onClose();
   };
 
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <motion.div
+        <div className="fixed inset-0 flex items-center justify-center z-[300] p-4">
+          <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="relative w-full max-w-lg bg-[#1C1C1E] border border-white/10 rounded-[32px] overflow-hidden shadow-2xl"
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="relative w-full max-w-md"
           >
-            <div className="p-6">
+            <GlassCard className="p-8 bg-[#1C1C1E] border-white/10 shadow-[0_32px_64px_rgba(0,0,0,0.5)]">
               <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 flex items-center justify-center text-indigo-400">
-                    <Target size={20} />
+                <div className="flex items-center gap-4">
+                  <div className="p-3 rounded-2xl bg-indigo-500/20 text-indigo-400">
+                    <Target size={24} />
                   </div>
                   <div>
-                    <h2 className="text-xl font-display font-medium text-white">{t('budgets')}</h2>
-                    <p className="text-[10px] text-white/30 uppercase tracking-widest">{t('setBudget')}</p>
+                    <h3 className="text-lg font-bold text-white">{t('setBudget')}</h3>
+                    <p className="text-[10px] text-white/40 uppercase tracking-widest font-medium">Monthly Spending Goal</p>
                   </div>
                 </div>
-                <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full text-white/30 transition-colors">
-                  <X size={20} />
+                <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-xl text-white/40 transition-colors">
+                  <X size={24} />
                 </button>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-6 mb-8 p-6 rounded-2xl bg-white/[0.02] border border-white/5">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest pl-1">Category</label>
-                    <div className="relative flex items-center">
-                      <div 
-                        className="absolute left-3 w-6 h-6 rounded-lg flex items-center justify-center pointer-events-none"
-                        style={{ backgroundColor: `${CATEGORY_COLORS[selectedCategory]}20`, color: CATEGORY_COLORS[selectedCategory] }}
-                      >
-                        <CategoryIcon category={selectedCategory} size={14} />
-                      </div>
-                      <select
-                        value={selectedCategory}
-                        onChange={(e) => setSelectedCategory(e.target.value as Category)}
-                        className="glass-input w-full appearance-none pl-11 pr-8 text-xs"
-                      >
-                        {CATEGORIES.map(cat => (
-                          <option key={cat} value={cat} className="bg-[#1C1C1E]">{cat}</option>
-                        ) )}
-                      </select>
-                    </div>
+              <form onSubmit={handleSubmit} className="space-y-6">
+                <div>
+                  <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3 block">
+                    {t('category')}
+                  </label>
+                  <select 
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value as Category)}
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all appearance-none cursor-pointer"
+                  >
+                    {CATEGORIES.map(cat => (
+                      <option key={cat} value={cat} className="bg-[#1C1C1E]">{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3 block">
+                      {t('amount')}
+                    </label>
+                    <input 
+                      type="number"
+                      step="0.01"
+                      required
+                      placeholder="0.00"
+                      value={limit}
+                      onChange={(e) => setLimit(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-xl font-medium"
+                    />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest pl-1">Currency</label>
-                    <select
+                  <div>
+                    <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3 block">
+                      Currency
+                    </label>
+                    <select 
                       value={currency}
                       onChange={(e) => setCurrency(e.target.value)}
-                      className="glass-input w-full text-xs"
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all appearance-none cursor-pointer text-center font-bold"
                     >
                       {SUPPORTED_CURRENCIES.map(curr => (
-                        <option key={curr.code} value={curr.code} className="bg-[#1C1C1E] font-sans">{curr.code}</option>
-                      ) )}
+                        <option key={curr.code} value={curr.code} className="bg-[#1C1C1E]">{curr.code}</option>
+                      ))}
                     </select>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest pl-1">{t('budgetLimit')}</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20 text-xs">
-                        {SUPPORTED_CURRENCIES.find(c => c.code === currency)?.symbol}
-                      </span>
-                      <input
-                        type="number"
-                        placeholder="0.00"
-                        value={limit}
-                        onChange={(e) => setLimit(e.target.value)}
-                        className="glass-input w-full pl-9 text-xs"
-                        required
-                      />
-                    </div>
-                  </div>
                 </div>
-                <button 
-                  type="submit"
-                  className="w-full flex items-center justify-center gap-2 py-3 bg-white text-black text-[11px] font-bold uppercase tracking-widest rounded-xl hover:bg-neutral-200 transition-colors"
-                >
-                  <Plus size={16} />
-                  {t('setBudget')}
-                </button>
-              </form>
 
-              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                {budgets.length === 0 ? (
-                  <p className="text-[10px] text-white/20 text-center py-8">{t('noBudgets')}</p>
-                ) : (
-                  budgets.map((budget) => (
-                    <div key={budget.category} className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/5 group">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: `${CATEGORY_COLORS[budget.category]}20`, color: CATEGORY_COLORS[budget.category] }}>
-                           <CategoryIcon category={budget.category} size={18} />
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold text-white">{budget.category}</p>
-                          <p className="text-[10px] text-white/40">
-                             {SUPPORTED_CURRENCIES.find(c => c.code === (budget.currency || 'USD'))?.symbol}
-                             {budget.limit.toLocaleString()} / month
-                          </p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => onDeleteBudget(budget.category)}
-                        className="p-2 text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
+                {budgets.find(b => b.category === selectedCategory) && (
+                  <div className="p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10 flex items-start gap-3">
+                    <AlertCircle size={16} className="text-indigo-400 shrink-0 mt-0.5" />
+                    <p className="text-[11px] text-indigo-300/60 leading-relaxed font-medium">
+                      You already have a budget for this category. Saving will update the existing limit.
+                    </p>
+                  </div>
                 )}
-              </div>
-            </div>
+
+                <div className="flex gap-4 pt-4">
+                  {budgets.find(b => b.category === selectedCategory) && (
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        onDeleteBudget(selectedCategory);
+                        onClose();
+                      }}
+                      className="p-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all flex items-center justify-center"
+                    >
+                      <Trash2 size={20} />
+                    </button>
+                  )}
+                  <button 
+                    type="submit"
+                    className="flex-1 bg-indigo-500 hover:bg-indigo-400 text-white font-bold py-4 px-6 rounded-2xl transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+                  >
+                    <Save size={20} />
+                    {t('saveChanges')}
+                  </button>
+                </div>
+              </form>
+            </GlassCard>
           </motion.div>
         </div>
       )}

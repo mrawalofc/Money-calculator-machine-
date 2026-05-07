@@ -38,6 +38,7 @@ if (isConfigured && typeof window !== 'undefined') {
 }
 
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
 
 export { signInWithPopup, signOut };
 
