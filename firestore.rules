@@ -1,0 +1,115 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 0.1 Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- ENTITY VALIDATIONS ---
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'amount', 'type', 'category', 'date', 'createdAt', 'userId']) &&
+             data.keys().size() <= 11 && // allow some optional fields like note, personName, currency
+             data.id == request.resource.id &&
+             data.amount is number && data.amount >= 0 &&
+             data.type in ['income', 'expense', 'lent', 'borrowed', 'lent_repayment', 'borrowed_repayment'] &&
+             data.category is string && data.category.size() <= 100 &&
+             data.date is string && data.date.size() <= 20 &&
+             data.createdAt is number &&
+             data.userId == request.auth.uid &&
+             (!('note' in data) || (data.note is string && data.note.size() <= 1000)) &&
+             (!('personName' in data) || (data.personName is string && data.personName.size() <= 100)) &&
+             (!('currency' in data) || (data.currency is string && data.currency.size() <= 10));
+    }
+
+    function isValidBudget(data) {
+      return data.keys().hasAll(['category', 'limit', 'period', 'userId']) &&
+             data.keys().size() <= 6 && // allow currency
+             data.category == request.resource.id &&
+             data.limit is number && data.limit >= 0 &&
+             data.period == 'monthly' &&
+             data.userId == request.auth.uid &&
+             (!('currency' in data) || (data.currency is string && data.currency.size() <= 10));
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['name', 'currency', 'darkMode', 'language', 'userId']) &&
+             data.keys().size() <= 8 && // allow avatarUrl, multiColorMode
+             data.name is string && data.name.size() <= 100 &&
+             data.currency is string && data.currency.size() <= 10 &&
+             data.darkMode is bool &&
+             data.language in ['en', 'bn'] &&
+             data.userId == request.auth.uid &&
+             (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 2048)) &&
+             (!('multiColorMode' in data) || (data.multiColorMode is bool));
+    }
+
+    // --- TEST CONNECTION ---
+    match /test/connection {
+      allow read: if true;
+    }
+
+    // --- COLLECTION MATCHES ---
+
+    match /users/{userId} {
+      // Basic profile doc check (optional if not used, but good to have)
+      allow read: if isOwner(userId);
+      
+      match /transactions/{transactionId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(transactionId) && isValidTransaction(incoming());
+        allow update: if isOwner(userId) && isValidTransaction(incoming()) && 
+                        incoming().userId == existing().userId &&
+                        incoming().id == existing().id &&
+                        // Action based updates
+                        (incoming().diff(existing()).affectedKeys().hasOnly(['amount', 'type', 'category', 'date', 'note', 'personName', 'currency']));
+        allow delete: if isOwner(userId);
+      }
+
+      match /budgets/{categoryId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(categoryId) && isValidBudget(incoming());
+        allow update: if isOwner(userId) && isValidBudget(incoming()) &&
+                        incoming().userId == existing().userId &&
+                        incoming().category == existing().category &&
+                        (incoming().diff(existing()).affectedKeys().hasOnly(['limit', 'currency']));
+        allow delete: if isOwner(userId);
+      }
+
+      match /settings/{settingsId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(settingsId) && isValidSettings(incoming());
+        allow update: if isOwner(userId) && isValidSettings(incoming()) &&
+                        incoming().userId == existing().userId &&
+                        // Allow updating all non-identity fields
+                        (incoming().diff(existing()).affectedKeys().hasOnly(['name', 'currency', 'darkMode', 'avatarUrl', 'language', 'multiColorMode']));
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

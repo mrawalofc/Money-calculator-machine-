@@ -1,0 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-[#000000] text-slate-100 min-h-screen antialiased selection:bg-indigo-500/30;
+    font-family: var(--font-sans);
+  }
+}
+
+@layer components {
+  /* Dynamic Background Blobs */
+  .frosted-bg {
+    @apply fixed inset-0 overflow-hidden pointer-events-none z-0;
+  }
+  
+  .blob-1 {
+    @apply absolute top-[-20%] left-[-10%] w-[80vw] h-[80vw] bg-indigo-600/10 rounded-full blur-[150px];
+  }
+  
+  .blob-2 {
+    @apply absolute bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] bg-rose-500/5 rounded-full blur-[150px];
+  }
+
+  .frosted-bg.monochrome .blob-1 {
+    @apply bg-white/5;
+  }
+  
+  .frosted-bg.monochrome .blob-2 {
+    @apply bg-white/[0.02];
+  }
+
+  /* Glassmorphism Components */
+  .glass-card {
+    @apply bg-[#1C1C1E]/60 backdrop-blur-3xl border border-white/5 rounded-[24px] shadow-[0_8px_32px_rgba(0,0,0,0.3)];
+  }
+  
+  .glass-sidebar {
+    @apply bg-black/40 backdrop-blur-3xl border-r border-white/5;
+  }
+  
+  .glass-input {
+    @apply bg-white/5 border border-white/5 rounded-2xl px-5 py-3 focus:outline-none focus:ring-1 focus:ring-white/20 transition-all placeholder:text-slate-600 text-sm;
+  }
+
+  .glass-button {
+    @apply bg-white text-black hover:bg-slate-200 rounded-2xl px-6 py-3 font-semibold transition-all active:scale-[0.98] disabled:opacity-50;
+  }
+
+  .glass-button-ghost {
+    @apply bg-white/5 hover:bg-white/10 text-white rounded-2xl px-4 py-2 border border-white/5 shadow-sm transition-all active:scale-[0.98];
+  }
+
+  .glass-button-secondary {
+    @apply bg-white/10 hover:bg-white/15 text-white rounded-2xl px-4 py-2 transition-all active:scale-[0.98];
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full;
+  }
+}

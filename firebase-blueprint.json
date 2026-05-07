@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A financial transaction (income, expense, lending, or borrowing).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "type": { 
+          "type": "string",
+          "enum": ["income", "expense", "lent", "borrowed", "lent_repayment", "borrowed_repayment"]
+        },
+        "category": { "type": "string" },
+        "personName": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "userId": { "type": "string" }
+      },
+      "required": ["id", "amount", "type", "category", "date", "createdAt", "userId"]
+    },
+    "Budget": {
+      "title": "Budget",
+      "description": "Monthly spending limit for a specific category.",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string" },
+        "limit": { "type": "number" },
+        "currency": { "type": "string" },
+        "period": { "type": "string", "enum": ["monthly"] },
+        "userId": { "type": "string" }
+      },
+      "required": ["category", "limit", "period", "userId"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User preferences and profile settings.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "currency": { "type": "string" },
+        "darkMode": { "type": "boolean" },
+        "avatarUrl": { "type": "string" },
+        "language": { "type": "string", "enum": ["en", "bn"] },
+        "multiColorMode": { "type": "boolean" },
+        "userId": { "type": "string" }
+      },
+      "required": ["name", "currency", "darkMode", "language", "userId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User's financial transactions."
+    },
+    "/users/{userId}/budgets/{categoryId}": {
+      "schema": "Budget",
+      "description": "User's category-wise budgets."
+    },
+    "/users/{userId}/settings/current": {
+      "schema": "UserSettings",
+      "description": "User's application settings."
+    }
+  }
+}
