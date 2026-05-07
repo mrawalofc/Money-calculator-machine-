@@ -23,20 +23,62 @@ const BUDGETS_KEY = 'aurelius_budgets';
 
 export function useExpenses() {
   const [user, setUser] = useState<User | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [settings, setSettings] = useState<UserSettings>({
-    name: 'Guest User',
-    currency: 'USD',
-    darkMode: true,
-    avatarUrl: '',
-    language: 'en',
-    multiColorMode: true
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const local = localStorage.getItem(TRANSACTIONS_KEY);
+    try {
+      return local ? JSON.parse(local) : [];
+    } catch (e) {
+      console.error("Failed to parse local transactions", e);
+      return [];
+    }
+  });
+  const [budgets, setBudgets] = useState<Budget[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const local = localStorage.getItem(BUDGETS_KEY);
+    try {
+      return local ? JSON.parse(local) : [];
+    } catch (e) {
+      console.error("Failed to parse local budgets", e);
+      return [];
+    }
+  });
+  const [settings, setSettings] = useState<UserSettings>(() => {
+    // Try to load initial settings from localStorage for instant boot
+    const localSettings = typeof window !== 'undefined' ? localStorage.getItem(SETTINGS_KEY) : null;
+    if (localSettings) {
+      try {
+        return JSON.parse(localSettings);
+      } catch (e) {
+        console.error("Failed to parse local settings", e);
+      }
+    }
+    return {
+      name: 'Guest User',
+      currency: 'USD',
+      darkMode: true,
+      avatarUrl: '',
+      language: 'en',
+      multiColorMode: true
+    };
   });
 
   const [lastDeleted, setLastDeleted] = useState<Transaction[] | null>(null);
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   const [hasPendingWrites, setHasPendingWrites] = useState(false);
+
+  // Save to localStorage whenever data changes
+  useEffect(() => {
+    localStorage.setItem(TRANSACTIONS_KEY, JSON.stringify(transactions));
+  }, [transactions]);
+
+  useEffect(() => {
+    localStorage.setItem(BUDGETS_KEY, JSON.stringify(budgets));
+  }, [budgets]);
+
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }, [settings]);
 
   const convertAmount = (amount: number, from: string, to: string) => {
     if (from === to) return amount;

@@ -344,7 +344,12 @@ export default function App() {
                   <Calendar size={14} />
                   {format(currentTime, 'MMMM do, yyyy • hh:mm a')}
                 </span>
-                {user ? (
+                {!isAuthReady ? (
+                  <span className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-emerald-400 font-bold">
+                    <Database size={12} />
+                    Local Storage Mode (Owned)
+                  </span>
+                ) : user ? (
                   <span className="hidden sm:flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-indigo-400 font-bold">
                     <Cloud size={12} />
                     {navigator.onLine ? 'Cloud Sync Active' : 'Offline Mode (Local)'}
